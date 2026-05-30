@@ -1,4 +1,5 @@
 import {
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject,
   useState,
@@ -23,6 +24,7 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
+  GripVertical,
   Info,
   Layers,
   MousePointerClick,
@@ -35,6 +37,15 @@ import {
 interface LayerPanelProps {
   mapControllerRef: RefObject<MapController | null>;
   onResizeStart: (event: ReactMouseEvent<HTMLDivElement>) => void;
+}
+
+const BACKGROUND_SELECTION_ID = "__geolibre-background__";
+
+function layerTypeLabel(layer: GeoLibreLayer): string {
+  if (layer.type === "geojson" || layer.type === "vector-tiles") {
+    return "vector";
+  }
+  return layer.type;
 }
 
 function isMobileViewport(): boolean {
@@ -53,14 +64,78 @@ export function LayerPanel({
   const selectLayer = useAppStore((s) => s.selectLayer);
   const identifyLayerId = useAppStore((s) => s.identifyLayerId);
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
+  const basemapVisible = useAppStore((s) => s.basemapVisible);
+  const basemapOpacity = useAppStore((s) => s.basemapOpacity);
+  const setBasemapVisible = useAppStore((s) => s.setBasemapVisible);
+  const setBasemapOpacity = useAppStore((s) => s.setBasemapOpacity);
   const setLayerVisibility = useAppStore((s) => s.setLayerVisibility);
   const setLayerOpacity = useAppStore((s) => s.setLayerOpacity);
   const reorderLayer = useAppStore((s) => s.reorderLayer);
+  const moveLayer = useAppStore((s) => s.moveLayer);
   const removeLayer = useAppStore((s) => s.removeLayer);
   const [metadataLayer, setMetadataLayer] = useState<GeoLibreLayer | null>(null);
   const [layerPendingRemoval, setLayerPendingRemoval] =
     useState<GeoLibreLayer | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(isMobileViewport);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [dropTargetLayerId, setDropTargetLayerId] = useState<string | null>(
+    null,
+  );
+  const visibleLayers = [...layers].reverse();
+  const backgroundSelected = selectedLayerId === BACKGROUND_SELECTION_ID;
+  const allLayersVisible =
+    basemapVisible && layers.every((layer) => layer.visible);
+  const toggleAllLayers = () => {
+    const nextVisible = !allLayersVisible;
+    for (const layer of layers) {
+      setLayerVisibility(layer.id, nextVisible);
+    }
+    setBasemapVisible(nextVisible);
+  };
+  const draggedDisplayIndex = draggedLayerId
+    ? visibleLayers.findIndex((layer) => layer.id === draggedLayerId)
+    : -1;
+
+  const resetDragState = () => {
+    setDraggedLayerId(null);
+    setDropTargetLayerId(null);
+  };
+
+  const handleLayerDragStart = (
+    event: ReactDragEvent<HTMLElement>,
+    layerId: string,
+  ) => {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", layerId);
+    setDraggedLayerId(layerId);
+  };
+
+  const handleLayerDragOver = (
+    event: ReactDragEvent<HTMLDivElement>,
+    layerId: string,
+  ) => {
+    if (!draggedLayerId || draggedLayerId === layerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetLayerId(layerId);
+  };
+
+  const handleLayerDrop = (
+    event: ReactDragEvent<HTMLDivElement>,
+    layerId: string,
+    displayIndex: number,
+  ) => {
+    if (!draggedLayerId || draggedLayerId === layerId) {
+      resetDragState();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    moveLayer(draggedLayerId, layers.length - 1 - displayIndex);
+    resetDragState();
+  };
 
   if (isCollapsed) {
     return (
@@ -98,36 +173,59 @@ export function LayerPanel({
       />
       <div className="flex items-center justify-between border-b px-3 py-1.5">
         <span className="text-sm font-semibold">Layers</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          title="Collapse layers"
-          aria-label="Collapse layers"
-          onClick={() => setIsCollapsed(true)}
-        >
-          <PanelLeftClose className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title={allLayersVisible ? "Hide all layers" : "Show all layers"}
+            aria-label={
+              allLayersVisible ? "Hide all layers" : "Show all layers"
+            }
+            onClick={toggleAllLayers}
+          >
+            {allLayersVisible ? (
+              <Eye className="h-4 w-4" />
+            ) : (
+              <EyeOff className="h-4 w-4 text-muted-foreground" />
+            )}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="Collapse layers"
+            aria-label="Collapse layers"
+            onClick={() => setIsCollapsed(true)}
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <ScrollArea className="flex-1">
         <div className="space-y-1 p-2">
           {layers.length === 0 && (
             <p className="px-2 py-4 text-xs text-muted-foreground">
-              No layers. Add data from the toolbar.
+              No data layers. Add data from the toolbar.
             </p>
           )}
-          {[...layers].reverse().map((layer) => {
+          {visibleLayers.map((layer, displayIndex) => {
             const canIdentify =
               layer.type === "geojson" || layer.type === "vector-tiles";
             const identifyActive = identifyLayerId === layer.id;
             return (
               <div
                 key={layer.id}
-                className={`rounded-md border p-2 ${
+                className={`relative rounded-md border p-2 transition-colors ${
                   selectedLayerId === layer.id
                     ? "border-primary bg-primary/5"
-                    : "border-transparent bg-muted/30"
+                    : "border-border bg-background hover:border-muted-foreground/40 hover:bg-muted/20"
+                } ${
+                  draggedLayerId === layer.id ? "opacity-50" : ""
                 }`}
+                onDragOver={(e) => handleLayerDragOver(e, layer.id)}
+                onDrop={(e) => handleLayerDrop(e, layer.id, displayIndex)}
+                onDragEnd={resetDragState}
                 onClick={() => selectLayer(layer.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") selectLayer(layer.id);
@@ -135,7 +233,28 @@ export function LayerPanel({
                 role="button"
                 tabIndex={0}
               >
+                {dropTargetLayerId === layer.id &&
+                  draggedDisplayIndex > displayIndex && (
+                    <div className="pointer-events-none absolute -top-1 left-2 right-2 h-1 rounded-full bg-primary shadow-[0_0_0_2px_hsl(var(--background))]" />
+                  )}
+                {dropTargetLayerId === layer.id &&
+                  draggedDisplayIndex >= 0 &&
+                  draggedDisplayIndex < displayIndex && (
+                    <div className="pointer-events-none absolute -bottom-1 left-2 right-2 h-1 rounded-full bg-primary shadow-[0_0_0_2px_hsl(var(--background))]" />
+                  )}
                 <div className="flex items-center gap-1">
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    draggable
+                    title="Drag to reorder"
+                    aria-label={`Drag ${layer.name} to reorder`}
+                    className="cursor-grab rounded p-0.5 text-muted-foreground hover:bg-muted active:cursor-grabbing"
+                    onClick={(e) => e.stopPropagation()}
+                    onDragStart={(e) => handleLayerDragStart(e, layer.id)}
+                  >
+                    <GripVertical className="h-3.5 w-3.5" />
+                  </span>
                   <button
                     type="button"
                     className="rounded p-0.5 hover:bg-muted"
@@ -154,7 +273,7 @@ export function LayerPanel({
                     {layer.name}
                   </span>
                   <span className="text-[10px] uppercase text-muted-foreground">
-                    {layer.type}
+                    {layerTypeLabel(layer)}
                   </span>
                 </div>
                 {isPlaceholderLayer(layer) && (
@@ -271,6 +390,71 @@ export function LayerPanel({
               </div>
             );
           })}
+          <div
+            className={`rounded-md border p-2 transition-colors ${
+              backgroundSelected
+                ? "border-primary bg-primary/5"
+                : "border-border bg-background hover:border-muted-foreground/40 hover:bg-muted/20"
+            }`}
+            onClick={() => selectLayer(BACKGROUND_SELECTION_ID)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") selectLayer(BACKGROUND_SELECTION_ID);
+            }}
+            role="button"
+            tabIndex={0}
+          >
+            <div className="flex items-center gap-1">
+              <span
+                title="Background cannot be reordered"
+                className="rounded p-0.5 text-muted-foreground/50"
+              >
+                <GripVertical className="h-3.5 w-3.5" />
+              </span>
+              <button
+                type="button"
+                className="rounded p-0.5 hover:bg-muted"
+                title={
+                  basemapVisible ? "Hide background" : "Show background"
+                }
+                aria-label={
+                  basemapVisible ? "Hide background" : "Show background"
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setBasemapVisible(!basemapVisible);
+                }}
+              >
+                {basemapVisible ? (
+                  <Eye className="h-3.5 w-3.5" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+                )}
+              </button>
+              <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="flex-1 truncate text-sm font-medium">
+                Background
+              </span>
+              <span className="text-[10px] uppercase text-muted-foreground">
+                basemap
+              </span>
+            </div>
+            <div className="mt-2 flex items-center gap-1">
+              <span className="text-[10px] text-muted-foreground">
+                Opacity
+              </span>
+              <Slider
+                className="flex-1"
+                min={0}
+                max={1}
+                step={0.05}
+                value={[basemapOpacity]}
+                onValueChange={([v]) =>
+                  setBasemapOpacity(v ?? basemapOpacity)
+                }
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          </div>
         </div>
       </ScrollArea>
       <Separator />

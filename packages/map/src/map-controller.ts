@@ -1,9 +1,13 @@
-import { BLANK_BASEMAP, DEFAULT_BASEMAP } from "@geolibre/core";
+import { BLANK_BASEMAP, DEFAULT_BASEMAP, useAppStore } from "@geolibre/core";
 import type { GeoLibreLayer, MapViewState } from "@geolibre/core";
 import bbox from "@turf/bbox";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import maplibregl from "maplibre-gl";
-import { LayerControl } from "maplibre-gl-layer-control";
+import {
+  LayerControl,
+  type CustomLayerAdapter,
+  type LayerState,
+} from "maplibre-gl-layer-control";
 import {
   circleLayerId,
   fillLayerId,
@@ -13,6 +17,7 @@ import {
   highlightLineLayerId,
   highlightSourceId,
   lineLayerId,
+  sourceId,
 } from "./geojson-loader";
 import { removeLayerFromMap, syncLayer } from "./layer-sync";
 
@@ -28,6 +33,22 @@ const LAYER_CONTROL_EXCLUDED_LAYERS = [
   highlightLineLayerId(),
   highlightCircleLayerId(),
 ];
+const NON_BASEMAP_STYLE_LAYER_IDS = [
+  highlightFillLayerId(),
+  highlightLineLayerId(),
+  highlightCircleLayerId(),
+];
+const OPACITY_PAINT_PROPERTIES: Record<string, string[]> = {
+  background: ["background-opacity"],
+  circle: ["circle-opacity"],
+  fill: ["fill-opacity"],
+  "fill-extrusion": ["fill-extrusion-opacity"],
+  heatmap: ["heatmap-opacity"],
+  hillshade: ["hillshade-exaggeration"],
+  line: ["line-opacity"],
+  raster: ["raster-opacity"],
+  symbol: ["icon-opacity", "text-opacity"],
+};
 const TERRAIN_SOURCE_ID = "geolibre-terrain-dem";
 const TERRAIN_SOURCE: maplibregl.RasterDEMSourceSpecification = {
   type: "raster-dem",
@@ -72,16 +93,23 @@ function resolveMapStyle(
   return styleUrl ?? DEFAULT_BASEMAP;
 }
 
-interface NamedLayerState {
-  visible: boolean;
-  opacity: number;
-  name: string;
+interface LayerControlConfig {
+  excludeLayers?: string[];
+  customLayerAdapters?: CustomLayerAdapter[];
 }
 
-interface LayerControlConfig {
-  layers?: string[];
-  layerStates?: Record<string, NamedLayerState>;
-  excludeLayers?: string[];
+interface LayerControlInternalState {
+  panel?: HTMLElement;
+  state?: {
+    layerStates?: Record<
+      string,
+      {
+        visible: boolean;
+        opacity: number;
+        name: string;
+      }
+    >;
+  };
 }
 
 interface GeoLibreLayerLabelWindow extends Window {
@@ -142,8 +170,12 @@ export class MapController {
   private layerControl: LayerControl | null = null;
   private layerControlSignature = "";
   private basemapStyleUrl = DEFAULT_BASEMAP;
+  private basemapVisible = true;
+  private basemapOpacity = 1;
+  private basemapOriginalPaintValues = new Map<string, Map<string, unknown>>();
   private syncedLayers: GeoLibreLayer[] = [];
   private layerIds: string[] = [];
+  private styleReady = false;
   private controlVisibility: Record<BuiltInMapControl, boolean> = {
     ...DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
   };
@@ -171,16 +203,16 @@ export class MapController {
       attributionControl: false,
       maplibreLogo: false,
     });
-    this.map.on("style.load", () => {
+    const handleStyleReady = () => {
+      this.styleReady = true;
       this.enforceDefaultProjection();
       this.addTerrainSource();
+      this.applyBasemapVisibility();
+      this.applyBasemapOpacity();
       this.addLayerControl();
-    });
-    this.map.once("load", () => {
-      this.enforceDefaultProjection();
-      this.addTerrainSource();
-      this.addLayerControl();
-    });
+    };
+    this.map.on("style.load", handleStyleReady);
+    this.map.once("load", handleStyleReady);
     this.map.once("idle", () => this.enforceDefaultProjection());
     this.addNavigationControl();
     this.addFullscreenControl();
@@ -195,6 +227,10 @@ export class MapController {
 
   getMap(): maplibregl.Map | null {
     return this.map;
+  }
+
+  private isStyleReady(): boolean {
+    return Boolean(this.map && this.styleReady);
   }
 
   addControl(
@@ -274,14 +310,29 @@ export class MapController {
     this.removeLayerControl();
     this.map?.remove();
     this.map = null;
+    this.styleReady = false;
     this.publishLayerDisplayNames([]);
   }
 
   setStyle(url: string): void {
     if (!this.map) return;
     this.basemapStyleUrl = url;
+    this.styleReady = false;
+    this.basemapOriginalPaintValues.clear();
     this.removeLayerControl();
     this.map.setStyle(resolveMapStyle(url));
+  }
+
+  setBasemapVisible(visible: boolean): void {
+    this.basemapVisible = visible;
+    this.applyBasemapVisibility();
+    this.syncLayerControlState();
+  }
+
+  setBasemapOpacity(opacity: number): void {
+    this.basemapOpacity = opacity;
+    this.applyBasemapOpacity();
+    this.syncLayerControlState();
   }
 
   applyView(view: MapViewState): void {
@@ -320,22 +371,26 @@ export class MapController {
   }
 
   syncLayers(layers: GeoLibreLayer[]): void {
-    if (!this.map || !this.map.isStyleLoaded()) return;
+    if (!this.isStyleReady() || !this.map) return;
+    const map = this.map;
 
     const nextIds = layers.map((l) => l.id);
     for (const id of this.layerIds) {
       if (!nextIds.includes(id)) {
-        removeLayerFromMap(this.map, id);
+        removeLayerFromMap(map, id);
       }
     }
 
     for (const [index, layer] of layers.entries()) {
-      syncLayer(this.map, layer, this.getBeforeStyleLayerId(layers, index));
+      syncLayer(map, layer, this.getBeforeStyleLayerId(layers, index));
     }
     this.layerIds = nextIds;
     this.syncedLayers = layers;
+    this.applyBasemapVisibility();
+    this.applyBasemapOpacity();
     this.publishLayerDisplayNames(layers);
     this.refreshLayerControl(layers);
+    this.syncLayerControlState();
   }
 
   private styleLoadHandler: (() => void) | null = null;
@@ -345,17 +400,96 @@ export class MapController {
 
     if (this.styleLoadHandler) {
       this.map.off("style.load", this.styleLoadHandler);
+      this.map.off("load", this.styleLoadHandler);
     }
 
-    const run = () => this.syncLayers(layers);
+    const run = () => {
+      if (this.styleLoadHandler !== run) return;
+      this.syncLayers(layers);
+    };
     this.styleLoadHandler = run;
 
-    if (this.map.isStyleLoaded()) {
+    if (this.isStyleReady()) {
       run();
     } else {
       this.map.once("load", run);
     }
     this.map.on("style.load", run);
+  }
+
+  private applyBasemapVisibility(): void {
+    if (!this.isStyleReady() || !this.map) return;
+    const map = this.map;
+
+    for (const layer of this.getBasemapStyleLayers()) {
+      try {
+        map.setLayoutProperty(
+          layer.id,
+          "visibility",
+          this.basemapVisible ? "visible" : "none",
+        );
+      } catch {
+        // Some third-party custom style layers may not expose layout properties.
+      }
+    }
+  }
+
+  private applyBasemapOpacity(): void {
+    if (!this.isStyleReady()) return;
+
+    for (const layer of this.getBasemapStyleLayers()) {
+      const properties = OPACITY_PAINT_PROPERTIES[layer.type] ?? [];
+      for (const property of properties) {
+        this.setBasemapPaintOpacity(layer.id, property);
+      }
+    }
+  }
+
+  private getBasemapStyleLayers(): maplibregl.LayerSpecification[] {
+    if (!this.isStyleReady() || !this.map) return [];
+    const map = this.map;
+
+    const userStyleLayerIds = new Set(
+      this.syncedLayers.flatMap((layer) =>
+        this.getCandidateStyleLayers(layer).map(({ id }) => id),
+      ),
+    );
+    const nonBasemapStyleLayerIds = new Set(NON_BASEMAP_STYLE_LAYER_IDS);
+
+    return (map.getStyle().layers ?? []).filter(
+      (layer) =>
+        !userStyleLayerIds.has(layer.id) &&
+        !nonBasemapStyleLayerIds.has(layer.id),
+    );
+  }
+
+  private setBasemapPaintOpacity(layerId: string, property: string): void {
+    if (!this.map) return;
+
+    let originalPaintValues = this.basemapOriginalPaintValues.get(layerId);
+    if (!originalPaintValues) {
+      originalPaintValues = new Map<string, unknown>();
+      this.basemapOriginalPaintValues.set(layerId, originalPaintValues);
+    }
+    if (!originalPaintValues.has(property)) {
+      originalPaintValues.set(
+        property,
+        this.map.getPaintProperty(layerId, property),
+      );
+    }
+
+    const original = originalPaintValues.get(property);
+    const opacity =
+      this.basemapOpacity >= 1
+        ? original
+        : typeof original === "number"
+          ? original * this.basemapOpacity
+          : this.basemapOpacity;
+    try {
+      this.map.setPaintProperty(layerId, property, opacity);
+    } catch {
+      // Some third-party custom style layers may not expose paint properties.
+    }
   }
 
   fitLayer(layer: GeoLibreLayer): void {
@@ -386,7 +520,7 @@ export class MapController {
     featureId: string | null,
     options: { fit?: boolean } = {},
   ): void {
-    if (!this.map || !this.map.isStyleLoaded()) return;
+    if (!this.isStyleReady()) return;
 
     if (!layer?.geojson || !featureId) {
       this.syncHighlight(EMPTY_HIGHLIGHT);
@@ -451,13 +585,14 @@ export class MapController {
   }
 
   private syncHighlight(featureCollection: FeatureCollection): void {
-    if (!this.map || !this.map.isStyleLoaded()) return;
+    if (!this.isStyleReady() || !this.map) return;
+    const map = this.map;
 
-    const source = this.map.getSource(highlightSourceId());
+    const source = map.getSource(highlightSourceId());
     if (source) {
       (source as maplibregl.GeoJSONSource).setData(featureCollection);
     } else {
-      this.map.addSource(highlightSourceId(), {
+      map.addSource(highlightSourceId(), {
         type: "geojson",
         data: featureCollection,
       });
@@ -537,7 +672,7 @@ export class MapController {
     if (
       !this.map ||
       !this.controlVisibility.terrain ||
-      !this.map.isStyleLoaded()
+      !this.isStyleReady()
     ) {
       return false;
     }
@@ -570,6 +705,8 @@ export class MapController {
       this.layerControl,
       this.controlPositions["layer-control"],
     );
+    this.syncLayerControlState();
+    window.setTimeout(() => this.syncLayerControlState(), 100);
     return true;
   }
 
@@ -596,42 +733,226 @@ export class MapController {
     this.addLayerControl();
   }
 
+  private syncLayerControlState(): void {
+    this.syncLayerControlBackgroundState();
+    this.syncLayerControlLayerStates(this.syncedLayers);
+  }
+
   private createLayerControlConfig(
     layers: GeoLibreLayer[],
   ): LayerControlConfig {
-    const namedStyleLayers = layers.flatMap((layer) =>
-      this.getNamedStyleLayers(layer),
+    const nativeStyleLayerIds = layers.flatMap((layer) =>
+      this.getCandidateStyleLayers(layer).map(({ id }) => id),
     );
-    if (namedStyleLayers.length === 0) {
-      return { excludeLayers: LAYER_CONTROL_EXCLUDED_LAYERS };
+    const excludeLayers = [
+      ...LAYER_CONTROL_EXCLUDED_LAYERS,
+      ...nativeStyleLayerIds,
+    ];
+    const controllableLayers = layers.filter(
+      (layer) => this.getNativeLayerIds(layer).length > 0,
+    );
+
+    if (controllableLayers.length === 0) {
+      return { excludeLayers };
     }
 
     return {
-      excludeLayers: LAYER_CONTROL_EXCLUDED_LAYERS,
-      layers: namedStyleLayers.map(({ id }) => id),
-      layerStates: Object.fromEntries(
-        namedStyleLayers.map(({ id, name, layer }) => [
-          id,
-          {
-            visible: layer.visible,
-            opacity: layer.opacity,
-            name,
-          },
-        ]),
-      ),
+      excludeLayers,
+      customLayerAdapters: [this.createGeoLibreLayerAdapter(controllableLayers)],
     };
   }
 
   private createLayerControlSignature(config: LayerControlConfig): string {
+    // Only structural attributes belong in the signature. Opacity and
+    // visibility are managed in place by the control and persisted to the
+    // store; including them here would destroy and recreate the control
+    // (collapsing it and interrupting the drag) on every slider or checkbox
+    // interaction.
     return JSON.stringify({
-      layers: config.layers ?? [],
-      names: Object.fromEntries(
-        Object.entries(config.layerStates ?? {}).map(([id, state]) => [
-          id,
-          state.name,
-        ]),
+      excluded: config.excludeLayers ?? [],
+      layers: config.customLayerAdapters?.flatMap((adapter) =>
+        adapter.getLayerIds().map((id) => {
+          const state = adapter.getLayerState(id);
+          return {
+            id,
+            name: state?.name,
+            symbol: adapter.getSymbolType?.(id),
+          };
+        }),
       ),
     });
+  }
+
+  private syncLayerControlBackgroundState(): void {
+    if (!this.layerControl) return;
+    const control = this.layerControl as unknown as LayerControlInternalState;
+
+    const backgroundState =
+      control.state?.layerStates?.Background ??
+      (control.state?.layerStates
+        ? (control.state.layerStates.Background = {
+            visible: this.basemapVisible,
+            opacity: this.basemapOpacity,
+            name: "Background",
+          })
+        : null);
+    if (backgroundState) {
+      backgroundState.visible = this.basemapVisible;
+      backgroundState.opacity = this.basemapOpacity;
+    }
+
+    const backgroundItem = this.getLayerControlItem("Background");
+    if (!backgroundItem) return;
+
+    this.updateLayerControlItem(backgroundItem, {
+      name: "Background",
+      visible: this.basemapVisible,
+      opacity: this.basemapOpacity,
+    });
+  }
+
+  private syncLayerControlLayerStates(layers: GeoLibreLayer[]): void {
+    if (!this.layerControl) return;
+    const control = this.layerControl as unknown as LayerControlInternalState;
+
+    for (const layer of layers) {
+      const layerState = control.state?.layerStates?.[layer.id];
+      if (layerState) {
+        layerState.visible = layer.visible;
+        layerState.opacity = layer.opacity;
+        layerState.name = layer.name;
+      }
+
+      const layerItem = this.getLayerControlItem(layer.id);
+      if (!layerItem) continue;
+      this.updateLayerControlItem(layerItem, {
+        name: layer.name,
+        visible: layer.visible,
+        opacity: layer.opacity,
+      });
+    }
+  }
+
+  private getLayerControlItem(layerId: string): HTMLElement | null {
+    const control = this.layerControl as unknown as LayerControlInternalState;
+    const items = control.panel?.querySelectorAll(".layer-control-item") ?? [];
+    return (
+      Array.from(items).find(
+        (item) => (item as HTMLElement).dataset.layerId === layerId,
+      ) as HTMLElement | undefined
+    ) ?? null;
+  }
+
+  private updateLayerControlItem(
+    item: HTMLElement,
+    state: { name: string; visible: boolean; opacity: number },
+  ): void {
+    const checkbox = item.querySelector(
+      ".layer-control-checkbox",
+    ) as HTMLInputElement | null;
+    if (checkbox) checkbox.checked = state.visible;
+
+    const opacity = item.querySelector(
+      ".layer-control-opacity",
+    ) as HTMLInputElement | null;
+    if (opacity) {
+      opacity.value = String(state.opacity);
+      opacity.title = `Opacity: ${Math.round(state.opacity * 100)}%`;
+    }
+
+    const name = item.querySelector(".layer-control-name") as HTMLElement | null;
+    if (name) {
+      name.textContent = state.name;
+      name.title = state.name;
+    }
+  }
+
+  private createGeoLibreLayerAdapter(
+    layers: GeoLibreLayer[],
+  ): CustomLayerAdapter {
+    const layerById = new Map(layers.map((layer) => [layer.id, layer]));
+
+    return {
+      type: "geolibre",
+      getLayerIds: () => layers.map((layer) => layer.id),
+      getLayerState: (layerId) => {
+        const layer = layerById.get(layerId);
+        if (!layer) return null;
+        return {
+          visible: layer.visible,
+          opacity: layer.opacity,
+          name: layer.name,
+          isCustomLayer: true,
+          customLayerType: this.getLayerSymbolType(layer),
+        } satisfies LayerState;
+      },
+      setVisibility: (layerId, visible) => {
+        // Update the store (the source of truth) and let the layer sync
+        // pass apply the visibility change to the map, so it is not undone
+        // by the next syncLayers.
+        useAppStore.getState().setLayerVisibility(layerId, visible);
+      },
+      setOpacity: (layerId, opacity) => {
+        // Persist opacity to the layer model; syncLayer derives paint from
+        // layer.opacity, so updating the store keeps the map and UI in sync.
+        useAppStore.getState().setLayerOpacity(layerId, opacity);
+      },
+      getName: (layerId) => layerById.get(layerId)?.name ?? layerId,
+      getSymbolType: (layerId) => {
+        const layer = layerById.get(layerId);
+        return layer ? this.getLayerSymbolType(layer) : "custom";
+      },
+      getBounds: (layerId) => {
+        const layer = layerById.get(layerId);
+        if (!layer) return null;
+        // GeoJSON-backed layers derive bounds from their features; other
+        // layer types fall back to their source bounds (TileJSON) when
+        // advertised, and return null (no zoom-to-bounds) otherwise.
+        return getLayerBounds(layer) ?? this.getLayerSourceBounds(layer);
+      },
+      getNativeLayerIds: (layerId) => this.getNativeLayerIdsByLayerId(layerId),
+      removeLayer: (layerId) => {
+        // Remove the logical layer from the store; syncLayers then tears
+        // down the native sources/layers, keeping project state in sync.
+        useAppStore.getState().removeLayer(layerId);
+      },
+    };
+  }
+
+  private getNativeLayerIdsByLayerId(layerId: string): string[] {
+    const layer = this.syncedLayers.find((item) => item.id === layerId);
+    return layer ? this.getNativeLayerIds(layer) : [];
+  }
+
+  private getNativeLayerIds(layer: GeoLibreLayer): string[] {
+    return this.getCandidateStyleLayers(layer)
+      .map(({ id }) => id)
+      .filter((id) => this.map?.getLayer(id));
+  }
+
+  private getLayerSymbolType(layer: GeoLibreLayer): string {
+    const nativeLayer = this.getNativeLayerIds(layer)
+      .map((id) => this.map?.getLayer(id))
+      .find((item) => Boolean(item));
+
+    return nativeLayer?.type ?? "custom";
+  }
+
+  private getLayerSourceBounds(
+    layer: GeoLibreLayer,
+  ): [number, number, number, number] | null {
+    const source = this.map?.getSource(sourceId(layer.id)) as
+      | { bounds?: [number, number, number, number] }
+      | undefined;
+    const bounds = source?.bounds;
+    if (
+      Array.isArray(bounds) &&
+      bounds.length === 4 &&
+      bounds.every((value) => Number.isFinite(value))
+    ) {
+      return bounds;
+    }
+    return null;
   }
 
   private getNamedStyleLayers(layer: GeoLibreLayer): Array<{

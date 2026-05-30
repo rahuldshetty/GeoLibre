@@ -105,6 +105,8 @@ export interface GeoLibreProject {
   name: string;
   mapView: MapViewState;
   basemapStyleUrl: string;
+  basemapVisible: boolean;
+  basemapOpacity: number;
   layers: GeoLibreLayer[];
   styles: Record<string, LayerStyle>;
   metadata: Record<string, unknown>;

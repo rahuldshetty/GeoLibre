@@ -108,6 +108,8 @@ export const MapCanvas = memo(function MapCanvas({
   const controller = useRef<MapController | null>(null);
 
   const basemapStyleUrl = useAppStore((s) => s.basemapStyleUrl);
+  const basemapVisible = useAppStore((s) => s.basemapVisible);
+  const basemapOpacity = useAppStore((s) => s.basemapOpacity);
   const mapView = useAppStore((s) => s.mapView);
   const layers = useAppStore((s) => s.layers);
   const selectedLayerId = useAppStore((s) => s.selectedLayerId);
@@ -143,6 +145,8 @@ export const MapCanvas = memo(function MapCanvas({
     map.on("moveend", updateView);
     map.on("load", () => {
       mc.waitAndSyncLayers(useAppStore.getState().layers);
+      mc.setBasemapVisible(useAppStore.getState().basemapVisible);
+      mc.setBasemapOpacity(useAppStore.getState().basemapOpacity);
       const state = useAppStore.getState();
       mc.highlightFeature(
         state.layers.find((layer) => layer.id === state.selectedLayerId),
@@ -210,6 +214,12 @@ export const MapCanvas = memo(function MapCanvas({
     prevBasemap.current = basemapStyleUrl;
     map.once("style.load", () => {
       controller.current?.waitAndSyncLayers(useAppStore.getState().layers);
+      controller.current?.setBasemapVisible(
+        useAppStore.getState().basemapVisible,
+      );
+      controller.current?.setBasemapOpacity(
+        useAppStore.getState().basemapOpacity,
+      );
       const state = useAppStore.getState();
       controller.current?.highlightFeature(
         state.layers.find((layer) => layer.id === state.selectedLayerId),
@@ -218,6 +228,14 @@ export const MapCanvas = memo(function MapCanvas({
     });
     controller.current?.setStyle(basemapStyleUrl);
   }, [basemapStyleUrl]);
+
+  useEffect(() => {
+    controller.current?.setBasemapVisible(basemapVisible);
+  }, [basemapVisible]);
+
+  useEffect(() => {
+    controller.current?.setBasemapOpacity(basemapOpacity);
+  }, [basemapOpacity]);
 
   useEffect(() => {
     controller.current?.waitAndSyncLayers(layers);

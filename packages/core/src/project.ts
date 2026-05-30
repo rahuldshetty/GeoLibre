@@ -31,6 +31,8 @@ export function createEmptyProject(
     name,
     mapView: options.mapView ?? createDefaultMapView(),
     basemapStyleUrl: options.basemapStyleUrl ?? DEFAULT_BASEMAP,
+    basemapVisible: true,
+    basemapOpacity: 1,
     layers: [],
     styles: {},
     metadata: {},
@@ -51,6 +53,8 @@ export function parseProject(json: string): GeoLibreProject {
     name: data.name,
     mapView: data.mapView,
     basemapStyleUrl: data.basemapStyleUrl ?? DEFAULT_BASEMAP,
+    basemapVisible: data.basemapVisible ?? true,
+    basemapOpacity: data.basemapOpacity ?? 1,
     layers: (data.layers ?? []).map(normalizeLayer),
     styles: data.styles ?? {},
     metadata: data.metadata ?? {},
@@ -72,6 +76,8 @@ export function projectFromStore(state: {
   projectName: string;
   mapView: MapViewState;
   basemapStyleUrl: string;
+  basemapVisible: boolean;
+  basemapOpacity: number;
   layers: GeoLibreLayer[];
   metadata: Record<string, unknown>;
 }): GeoLibreProject {
@@ -84,6 +90,8 @@ export function projectFromStore(state: {
     name: state.projectName,
     mapView: state.mapView,
     basemapStyleUrl: state.basemapStyleUrl,
+    basemapVisible: state.basemapVisible,
+    basemapOpacity: state.basemapOpacity,
     layers: state.layers,
     styles,
     metadata: state.metadata,
@@ -94,6 +102,8 @@ export function applyProjectToStore(project: GeoLibreProject): {
   projectName: string;
   mapView: MapViewState;
   basemapStyleUrl: string;
+  basemapVisible: boolean;
+  basemapOpacity: number;
   layers: GeoLibreLayer[];
   metadata: Record<string, unknown>;
 } {
@@ -107,6 +117,8 @@ export function applyProjectToStore(project: GeoLibreProject): {
     projectName: project.name,
     mapView: project.mapView,
     basemapStyleUrl: project.basemapStyleUrl,
+    basemapVisible: project.basemapVisible ?? true,
+    basemapOpacity: project.basemapOpacity ?? 1,
     layers,
     metadata: project.metadata,
   };
