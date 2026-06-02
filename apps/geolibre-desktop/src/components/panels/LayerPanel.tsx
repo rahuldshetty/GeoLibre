@@ -221,6 +221,14 @@ export function LayerPanel({
           {visibleLayers.map((layer, displayIndex) => {
             const canIdentify =
               layer.type === "geojson" ||
+              (layer.type === "wms" &&
+                typeof layer.source.layers === "string" &&
+                Boolean(layer.source.layers.trim()) &&
+                Boolean(
+                  (typeof layer.source.url === "string" &&
+                    layer.source.url.trim()) ||
+                    layer.sourcePath,
+                )) ||
               layer.type === "vector-tiles" ||
               (layer.type === "mbtiles" &&
                 layer.metadata.tileType === "vector") ||
@@ -363,14 +371,14 @@ export function LayerPanel({
                         ? identifyActive
                           ? "Deactivate identify"
                           : "Identify features"
-                        : "Identify is only available for vector layers"
+                        : "Identify is only available for vector and WMS layers"
                     }
                     aria-label={
                       canIdentify
                         ? identifyActive
                           ? "Deactivate identify"
                           : "Identify features"
-                        : "Identify is only available for vector layers"
+                        : "Identify is only available for vector and WMS layers"
                     }
                     disabled={!canIdentify}
                     onClick={(e) => {
