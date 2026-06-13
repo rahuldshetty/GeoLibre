@@ -113,6 +113,7 @@ export interface AppState {
     conversionOpen: ConversionToolKind | null;
     vectorToolOpen: VectorToolKind | null;
     rasterToolOpen: RasterToolKind | null;
+    geocodeOpen: boolean;
     sqlWorkspaceOpen: boolean;
     attributeTableOpen: boolean;
     storymapPanelOpen: boolean;
@@ -139,6 +140,7 @@ export interface AppState {
   setConversionOpen: (kind: ConversionToolKind | null) => void;
   setVectorToolOpen: (kind: VectorToolKind | null) => void;
   setRasterToolOpen: (kind: RasterToolKind | null) => void;
+  setGeocodeOpen: (open: boolean) => void;
   setSqlWorkspaceOpen: (open: boolean) => void;
   setAttributeTableOpen: (open: boolean) => void;
   setStorymapPanelOpen: (open: boolean) => void;
@@ -244,6 +246,7 @@ export const useAppStore = create<AppState>()(
         conversionOpen: null,
         vectorToolOpen: null,
         rasterToolOpen: null,
+        geocodeOpen: false,
         sqlWorkspaceOpen: false,
         attributeTableOpen: false,
         storymapPanelOpen: false,
@@ -284,6 +287,8 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ ui: { ...s.ui, vectorToolOpen: kind } })),
       setRasterToolOpen: (kind) =>
         set((s) => ({ ui: { ...s.ui, rasterToolOpen: kind } })),
+      setGeocodeOpen: (open) =>
+        set((s) => ({ ui: { ...s.ui, geocodeOpen: open } })),
       setSqlWorkspaceOpen: (open) =>
         set((s) => ({ ui: { ...s.ui, sqlWorkspaceOpen: open } })),
       setAttributeTableOpen: (open) =>

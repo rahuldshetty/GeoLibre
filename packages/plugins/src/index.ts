@@ -116,6 +116,13 @@ export {
   restoreDirections,
 } from "./plugins/maplibre-directions";
 export {
+  REVERSE_GEOCODE_PLUGIN_ID,
+  maplibreReverseGeocodePlugin,
+  restoreReverseGeocode,
+  setReverseGeocodeLabels,
+  type ReverseGeocodeLabels,
+} from "./plugins/maplibre-reverse-geocode";
+export {
   EFFECTS_PLUGIN_ID,
   maplibreEffectsPlugin,
   restoreEffects,

@@ -11,6 +11,8 @@ import {
   getGeometryEditTargetLayerId,
   restoreDeckViz,
   restoreDirections,
+  restoreReverseGeocode,
+  REVERSE_GEOCODE_PLUGIN_ID,
   restoreEffects,
   restoreRasterLayers,
   restoreThreeDTilesLayers,
@@ -52,6 +54,7 @@ import {
   useExternalPluginsReady,
 } from "../../hooks/usePlugins";
 import { registerMbtilesProtocol } from "../../lib/mbtiles";
+import { hasReverseGeocodeConsent } from "../../lib/reverse-geocode-consent";
 import { registerXyzTileProtocol } from "../../lib/xyz-url";
 import { useEmbedBridge } from "../../hooks/useEmbedBridge";
 import {
@@ -111,6 +114,20 @@ const VectorToolsDialog = lazy(() =>
       console.error("Failed to load VectorToolsDialog", error);
       const Fallback = (() =>
         null) as unknown as typeof import("../processing/VectorToolsDialog").VectorToolsDialog;
+      return { default: Fallback };
+    }),
+);
+
+const GeocodeDialog = lazy(() =>
+  import("../processing/GeocodeDialog")
+    .then((module) => ({
+      default: module.GeocodeDialog,
+    }))
+    .catch((error) => {
+      // Same chunk-load fallback rationale as ProcessingDialog above.
+      console.error("Failed to load GeocodeDialog", error);
+      const Fallback = (() =>
+        null) as unknown as typeof import("../processing/GeocodeDialog").GeocodeDialog;
       return { default: Fallback };
     }),
 );
@@ -387,6 +404,21 @@ export function DesktopShell({
     // Rebind the directions tool to the (possibly new) map instance after a
     // map re-init, since restoreProjectState skips an already-active plugin.
     restoreDirections(appAPI, pluginManager.isActive(DIRECTIONS_PLUGIN_ID));
+    // Reverse geocode sends clicked coordinates to a public geocoder. If a
+    // restored project marks it active but this device never acknowledged the
+    // privacy notice, deactivate it so no coordinates are sent without consent;
+    // the user must re-enable it (which shows the notice). This makes the
+    // consent gate cover every activation path, not just the toolbar toggle.
+    if (
+      pluginManager.isActive(REVERSE_GEOCODE_PLUGIN_ID) &&
+      !hasReverseGeocodeConsent()
+    ) {
+      pluginManager.deactivate(REVERSE_GEOCODE_PLUGIN_ID, appAPI);
+    }
+    restoreReverseGeocode(
+      appAPI,
+      pluginManager.isActive(REVERSE_GEOCODE_PLUGIN_ID),
+    );
     // Same contract for the deck.gl overlay: re-attach it to the current map
     // and re-render any deckgl-viz layers a restored project carries.
     restoreDeckViz(appAPI, pluginManager.isActive(DECK_VIZ_PLUGIN_ID));
@@ -952,6 +984,9 @@ export function DesktopShell({
       </Suspense>
       <Suspense fallback={null}>
         <VectorToolsDialog mapControllerRef={mapControllerRef} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <GeocodeDialog mapControllerRef={mapControllerRef} />
       </Suspense>
       <Suspense fallback={null}>
         <RasterToolsDialog />
