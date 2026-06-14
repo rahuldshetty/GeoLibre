@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@geolibre/core": "*",
+    "@turf/area": "^7.3.5",
     "@turf/bbox": "^7.3.5",
     "@turf/tin": "^7.3.5",
     "@turf/voronoi": "^7.3.5",
