@@ -1,13 +1,26 @@
 import {
+  DEFAULT_EFFECTS_SETTINGS,
+  type EffectsSettings,
+  HALO_EXTENT_MAX,
+  HALO_EXTENT_MIN,
+  HALO_OPACITY_MAX,
+  HALO_OPACITY_MIN,
+} from "@geolibre/plugins";
+import {
   Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
+  Slider,
 } from "@geolibre/ui";
 import { ClipboardList, SlidersHorizontal } from "lucide-react";
+import { type MouseEvent as ReactMouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
 import {
@@ -25,6 +38,9 @@ interface ControlsMenuProps {
   reverseGeocodeActive: boolean;
   onToggleMapControl: (control: ToolbarMapControl) => void;
   onToggleEffects: () => void;
+  getEffectsSettings: () => EffectsSettings;
+  onPreviewEffectsSettings: (next: Partial<EffectsSettings>) => void;
+  onCommitEffectsSettings: () => void;
   onToggleDirections: () => void;
   onToggleReverseGeocode: () => void;
   onOpenFieldCollection: () => void;
@@ -40,6 +56,9 @@ export function ControlsMenu({
   reverseGeocodeActive,
   onToggleMapControl,
   onToggleEffects,
+  getEffectsSettings,
+  onPreviewEffectsSettings,
+  onCommitEffectsSettings,
   onToggleDirections,
   onToggleReverseGeocode,
   onOpenFieldCollection,
@@ -71,10 +90,13 @@ export function ControlsMenu({
             {controlsVisible[control.id] ? " ✓" : ""}
           </DropdownMenuItem>
         ))}
-        <DropdownMenuItem onClick={onToggleEffects}>
-          {t("toolbar.item.atmosphereEffects")}
-          {effectsActive ? " ✓" : ""}
-        </DropdownMenuItem>
+        <AtmosphereEffectsSubmenu
+          active={effectsActive}
+          onToggle={onToggleEffects}
+          getSettings={getEffectsSettings}
+          onPreview={onPreviewEffectsSettings}
+          onCommit={onCommitEffectsSettings}
+        />
         <DropdownMenuItem
           title={t("toolbar.item.directionsTooltip")}
           onClick={onToggleDirections}
@@ -129,5 +151,201 @@ export function ControlsMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+interface AtmosphereEffectsSubmenuProps {
+  active: boolean;
+  onToggle: () => void;
+  getSettings: () => EffectsSettings;
+  onPreview: (next: Partial<EffectsSettings>) => void;
+  onCommit: () => void;
+}
+
+/**
+ * Submenu for the globe atmosphere: an on/off toggle plus live controls for the
+ * halo color, how far the halo reaches past the globe (the "floats above the
+ * surface" vs "tight to the surface" look), the halo strength, and the deep
+ * space backdrop color.
+ *
+ * Settings live in module state in the effects plugin, so this keeps a local
+ * mirror seeded each time the submenu opens. Edits preview live (instant UI +
+ * globe redraw) on every change, and persist only when a gesture ends — a
+ * slider release, a color input blur, a reset, or the submenu closing — so a
+ * color-picker drag doesn't churn the project-dirty flag on every frame.
+ */
+function AtmosphereEffectsSubmenu({
+  active,
+  onToggle,
+  getSettings,
+  onPreview,
+  onCommit,
+}: AtmosphereEffectsSubmenuProps) {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<EffectsSettings>(getSettings);
+
+  const preview = (next: Partial<EffectsSettings>) => {
+    setSettings((prev) => ({ ...prev, ...next }));
+    onPreview(next);
+  };
+
+  return (
+    <DropdownMenuSub
+      onOpenChange={(open: boolean) => {
+        if (open) {
+          // Re-seed from the source of truth on open so the controls reflect a
+          // project that loaded new settings while the menu was closed.
+          setSettings(getSettings());
+        } else {
+          // Backstop: persist any previewed change whose gesture-end commit
+          // didn't fire (e.g. a color picked then the menu dismissed).
+          onCommit();
+        }
+      }}
+    >
+      <DropdownMenuSubTrigger>
+        {t("toolbar.item.atmosphereEffects")}
+        {active ? " ✓" : ""}
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="w-64">
+        <DropdownMenuItem
+          // onSelect (not onClick) fires for both mouse and keyboard
+          // (Enter/Space); preventDefault keeps the submenu open after toggling.
+          onSelect={(e: Event) => {
+            e.preventDefault();
+            onToggle();
+          }}
+        >
+          {t("toolbar.item.atmosphereEnabled")}
+          {active ? " ✓" : ""}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {/* Stop key events from reaching the menu's roving-focus/typeahead
+            handlers so sliders respond to arrow keys and the color inputs work. */}
+        <div
+          className="space-y-3 px-2 py-1.5"
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <ColorRow
+            label={t("toolbar.atmosphere.haloColor")}
+            value={settings.haloColor}
+            onPreview={(haloColor) => preview({ haloColor })}
+            onCommit={onCommit}
+          />
+          <SliderRow
+            label={t("toolbar.atmosphere.haloExtent")}
+            hint={t("toolbar.atmosphere.haloExtentHint")}
+            min={HALO_EXTENT_MIN}
+            max={HALO_EXTENT_MAX}
+            step={0.05}
+            value={settings.haloExtent}
+            format={(v) => `${v.toFixed(2)}×`}
+            onPreview={(haloExtent) => preview({ haloExtent })}
+            onCommit={onCommit}
+          />
+          <SliderRow
+            label={t("toolbar.atmosphere.haloOpacity")}
+            min={HALO_OPACITY_MIN}
+            max={HALO_OPACITY_MAX}
+            step={0.05}
+            value={settings.haloOpacity}
+            format={(v) => `${Math.round(v * 100)}%`}
+            onPreview={(haloOpacity) => preview({ haloOpacity })}
+            onCommit={onCommit}
+          />
+          <ColorRow
+            label={t("toolbar.atmosphere.spaceColor")}
+            value={settings.spaceColor}
+            onPreview={(spaceColor) => preview({ spaceColor })}
+            onCommit={onCommit}
+          />
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          // onSelect fires for mouse and keyboard alike. A discrete action:
+          // preview the defaults, then commit immediately. preventDefault keeps
+          // the submenu open so the reset is visible in the controls.
+          onSelect={(e: Event) => {
+            e.preventDefault();
+            preview({ ...DEFAULT_EFFECTS_SETTINGS });
+            onCommit();
+          }}
+        >
+          {t("toolbar.atmosphere.reset")}
+        </DropdownMenuItem>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
+interface ColorRowProps {
+  label: string;
+  value: string;
+  onPreview: (value: string) => void;
+  onCommit: () => void;
+}
+
+function ColorRow({ label, value, onPreview, onCommit }: ColorRowProps) {
+  return (
+    <label className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <input
+        type="color"
+        aria-label={label}
+        value={value}
+        // onChange fires continuously while dragging in the picker (preview);
+        // onBlur fires once when the picker closes / focus leaves (commit).
+        onChange={(e) => onPreview(e.target.value)}
+        onBlur={onCommit}
+        className="h-6 w-10 cursor-pointer rounded border border-input bg-transparent p-0.5"
+      />
+    </label>
+  );
+}
+
+interface SliderRowProps {
+  label: string;
+  hint?: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  format: (value: number) => string;
+  onPreview: (value: number) => void;
+  onCommit: () => void;
+}
+
+function SliderRow({
+  label,
+  hint,
+  min,
+  max,
+  step,
+  value,
+  format,
+  onPreview,
+  onCommit,
+}: SliderRowProps) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground" title={hint}>
+          {label}
+        </span>
+        <span className="tabular-nums text-foreground">{format(value)}</span>
+      </div>
+      <Slider
+        aria-label={label}
+        min={min}
+        max={max}
+        step={step}
+        value={[value]}
+        // onValueChange streams every scrub frame (preview); onValueCommit
+        // fires once on pointer-up / keyboard commit (persist).
+        onValueChange={([v]: number[]) => onPreview(v ?? value)}
+        onValueCommit={onCommit}
+        onClick={(e: ReactMouseEvent) => e.stopPropagation()}
+      />
+    </div>
   );
 }

@@ -9,6 +9,9 @@ import {
   maplibreDeckGlVizPlugin,
   maplibreDirectionsPlugin,
   maplibreEffectsPlugin,
+  getEffectsSettings,
+  setEffectsSettings,
+  type EffectsSettings,
   maplibreEnviroAtlasPlugin,
   maplibreEsriWaybackPlugin,
   maplibreFemaWmsPlugin,
@@ -223,6 +226,43 @@ export function usePluginRegistry() {
         return;
       }
       persistProjectPluginState(before);
+    },
+    getEffectsSettings,
+    // Live preview: push the appearance change straight to the engine for an
+    // instant redraw, but do NOT persist. A color-picker drag or slider scrub
+    // fires this every frame, so keeping persistence out avoids marking the
+    // project dirty and sweeping Zustand subscribers on every pixel of movement.
+    previewEffectsSettings: (next: Partial<EffectsSettings>) => {
+      // Contained like toggle/reposition: setEffectsSettings drives imperative
+      // canvas code (engine.applySettings) that can throw and escape React's
+      // error boundaries; surface it in diagnostics instead of crashing.
+      try {
+        setEffectsSettings(next);
+      } catch (error) {
+        reportPluginError(maplibreEffectsPlugin.id, "preview-effects", error);
+      }
+    },
+    // Commit: called once when an edit gesture ends (slider release, color
+    // input blur, reset, or the submenu closing). Persists only when the
+    // appearance actually differs from what the project already holds, so a
+    // no-op gesture does not flag the project dirty.
+    commitEffectsSettings: () => {
+      try {
+        const storedSettings =
+          useAppStore.getState().projectPlugins?.settings?.[
+            maplibreEffectsPlugin.id
+          ];
+        const currentSettings = maplibreEffectsPlugin.getProjectState?.();
+        if (
+          JSON.stringify(storedSettings ?? null) ===
+          JSON.stringify(currentSettings ?? null)
+        ) {
+          return;
+        }
+        useAppStore.getState().setProjectPlugins(projectPluginStateSnapshot());
+      } catch (error) {
+        reportPluginError(maplibreEffectsPlugin.id, "commit-effects", error);
+      }
     },
   };
 }
