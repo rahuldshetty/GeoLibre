@@ -609,7 +609,10 @@ const LIDAR_OPTIONS = {
   collapsed: false,
   className: "geolibre-lidar-layer-control",
   panelWidth: 365,
-  maxHeight: 520,
+  // Omit maxHeight so the panel (maplibre-gl-lidar >= 0.16) expands to use all
+  // available vertical space within the map and exposes its corner resize
+  // handle, matching the upstream default. A fixed cap left empty space below a
+  // long panel on tall screens and suppressed the resize handle.
   pointSize: 2,
   colorScheme: "elevation",
   pickable: false,
@@ -1137,8 +1140,11 @@ const mountComponentsControl = (app: GeoLibreAppAPI): boolean => {
   return true;
 };
 
+/** Stable id of the Components plugin. */
+export const COMPONENTS_PLUGIN_ID = "maplibre-gl-components";
+
 export const maplibreComponentsPlugin: GeoLibrePlugin = {
-  id: "maplibre-gl-components",
+  id: COMPONENTS_PLUGIN_ID,
   name: "Components",
   version: "0.18.2",
   activate: (app: GeoLibreAppAPI) => {
