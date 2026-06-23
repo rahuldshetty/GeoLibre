@@ -79,6 +79,11 @@ export function ControlsMenu({
   const { t } = useTranslation();
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
   const show = (id: string) => isMenuItemVisible(uiProfile, id);
+  // Atmospheric effects only render on the globe (the engine idles in Mercator),
+  // so the submenu is disabled while the map is in a flat projection (#783). The
+  // GlobeControl toggle syncs this preference via the map "projectiontransition"
+  // event, so the menu reacts the moment the user switches projections.
+  const globeActive = useAppStore((s) => s.preferences.map.projection === "globe");
   const restrictBounds = useAppStore((s) => s.preferences.map.restrictBounds);
   const setPreferences = useAppStore((s) => s.setPreferences);
   // The globe cannot spin while the map bounds are locked, so enabling spin
@@ -147,6 +152,7 @@ export function ControlsMenu({
           {show("controls.atmosphereEffects") && (
             <AtmosphereEffectsSubmenu
               active={effectsActive}
+              disabled={!globeActive}
               onToggle={onToggleEffects}
               getSettings={getEffectsSettings}
               onPreview={onPreviewEffectsSettings}
@@ -282,6 +288,8 @@ export function ControlsMenu({
 
 interface AtmosphereEffectsSubmenuProps {
   active: boolean;
+  /** Greyed out and non-interactive while the map is not in globe projection. */
+  disabled: boolean;
   onToggle: () => void;
   getSettings: () => EffectsSettings;
   onPreview: (next: Partial<EffectsSettings>) => void;
@@ -302,6 +310,7 @@ interface AtmosphereEffectsSubmenuProps {
  */
 function AtmosphereEffectsSubmenu({
   active,
+  disabled,
   onToggle,
   getSettings,
   onPreview,
@@ -329,9 +338,18 @@ function AtmosphereEffectsSubmenu({
         }
       }}
     >
-      <DropdownMenuSubTrigger>
+      <DropdownMenuSubTrigger
+        // Off the globe the effects render nothing, so disable the submenu and
+        // explain why on hover. The trigger keeps pointer-events active (see
+        // dropdown-menu.tsx) so the native title tooltip still fires (#783).
+        disabled={disabled}
+        title={disabled ? t("toolbar.atmosphere.globeOnly") : undefined}
+      >
         {t("toolbar.item.atmosphereEffects")}
-        {active ? " ✓" : ""}
+        {/* Suppress the check on a disabled (Mercator) row: a ✓ on a greyed,
+            non-interactive entry reads ambiguously. The active state is kept and
+            the mark returns when globe view re-enables the row. */}
+        {!disabled && active ? " ✓" : ""}
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="w-64">
         <DropdownMenuItem
