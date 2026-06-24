@@ -15,6 +15,10 @@ function finite(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n);
 }
 
+// Accepted participant color: a 3- or 6-digit hex. Shared by the join path and
+// the stored-chat validator so both enforce the same shape.
+const HEX_COLOR_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
 /** Accept a cursor only when both coordinates are finite numbers, so a crafted
  *  frame can't push NaN/strings into peers' `marker.setLngLat`. */
 function sanitizeCursor(c: unknown): CollabCursor | null {
@@ -117,13 +121,40 @@ function canEdit(attachment: SocketAttachment, mode: CollaborationMode): boolean
   return mode === "co-edit";
 }
 
+/** Validate a single stored chat entry's field types so a corrupt record can't
+ *  reach clients (where it would, e.g., crash `coordinate.lat.toFixed`). */
+function isValidChatMessage(m: unknown): m is CollabChatMessage {
+  if (!m || typeof m !== "object") return false;
+  const o = m as Record<string, unknown>;
+  const coord = o.coordinate as Record<string, unknown> | null | undefined;
+  const coordOk =
+    coord === null ||
+    coord === undefined ||
+    (typeof coord === "object" && finite(coord.lng) && finite(coord.lat));
+  return (
+    typeof o.id === "string" &&
+    typeof o.clientId === "string" &&
+    typeof o.displayName === "string" &&
+    // Reject records whose field types/shapes would crash or mislead a client:
+    // a non-hex color, a blank body, a non-finite timestamp, or a bad coordinate
+    // (which would crash `coordinate.lat.toFixed`). Not a full write-path mirror.
+    typeof o.color === "string" &&
+    HEX_COLOR_RE.test(o.color) &&
+    typeof o.text === "string" &&
+    o.text !== "" &&
+    finite(o.ts) &&
+    coordOk
+  );
+}
+
 /** Parse the stored chat log defensively; a corrupt value yields an empty log
- *  rather than throwing (which would lock joiners out of the welcome). */
+ *  (rather than throwing, which would lock joiners out of the welcome) and any
+ *  malformed individual entries are dropped. */
 function parseStoredChat(raw: string | undefined): CollabChatMessage[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as CollabChatMessage[]) : [];
+    return Array.isArray(parsed) ? parsed.filter(isValidChatMessage) : [];
   } catch {
     return [];
   }
@@ -336,9 +367,12 @@ export class CollabSession extends DurableObject<Env> {
           .slice(0, 60) || "Guest",
       // Only accept a hex color; fall back to neutral grey so a hostile value
       // never reaches peers (defense-in-depth with the client's DOM rendering).
-      color: /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(message.color)
-        ? message.color
-        : "#888888",
+      // Guard the type first: `.test()` coerces a non-string (number/array) to a
+      // string, which could spuriously pass and store a non-string color.
+      color:
+        typeof message.color === "string" && HEX_COLOR_RE.test(message.color)
+          ? message.color
+          : "#888888",
       role,
     };
     ws.serializeAttachment(attachment);
