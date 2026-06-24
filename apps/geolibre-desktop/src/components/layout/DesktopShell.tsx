@@ -42,12 +42,18 @@ import {
 } from "react";
 import {
   isTauri,
+  loadDroppedPhotoFiles,
+  loadDroppedPhotoPaths,
   loadDroppedRasterFiles,
   loadDroppedRasterPaths,
   loadDroppedVectorFiles,
   loadDroppedVectorPaths,
   type DroppedRaster,
 } from "../../lib/tauri-io";
+import {
+  isPhotoDropFileName,
+  type GeotaggedPhotoResult,
+} from "../../lib/geotagged-photos";
 import type { LargeVectorDataset } from "../../lib/duckdb-vector-guard";
 import i18n from "../../i18n";
 import {
@@ -902,6 +908,32 @@ export function DesktopShell({
     [addGeoJsonLayer],
   );
 
+  const addDroppedPhotos = useCallback(
+    (result: GeotaggedPhotoResult | null): number => {
+      if (!result || result.located === 0) return 0;
+      const layerId = addGeoJsonLayer(
+        t("addData.photos.defaultName"),
+        result.featureCollection,
+      );
+      const layer = useAppStore
+        .getState()
+        .layers.find((existing) => existing.id === layerId);
+      if (layer) mapControllerRef.current?.fitLayer(layer);
+      // Report skipped (no-GPS) photos too, mirroring the Add Data dialog's
+      // summary, so a partially-skipped drop isn't silent.
+      const summary = t("addData.photos.addedSummary", {
+        count: result.located,
+      });
+      const skippedNote =
+        result.skipped > 0
+          ? ` ${t("addData.photos.skippedNote", { count: result.skipped })}`
+          : "";
+      setDropMessage(summary + skippedNote);
+      return result.located;
+    },
+    [addGeoJsonLayer, t],
+  );
+
   const addDroppedRasters = useCallback(
     async (rasters: DroppedRaster[]): Promise<number> => {
       if (!rasters.length) return 0;
@@ -1053,19 +1085,37 @@ export function DesktopShell({
               }
             }
 
-            if (otherPaths.length > 0) {
-              const rasterCount = await addDroppedRasters(
-                await loadDroppedRasterPaths(otherPaths),
+            // Geotagged photos become their own point layer; TIFF stays on the
+            // raster path. Handle them before the vector/raster pipeline so a
+            // dropped .jpg isn't routed to the DuckDB vector loader.
+            const photoResult = await loadDroppedPhotoPaths(otherPaths);
+            const photoCount = addDroppedPhotos(photoResult);
+            // Surface a clear message when every dropped photo lacked GPS, so
+            // the drop doesn't complete silently.
+            if (photoResult && photoCount === 0 && photoResult.total > 0) {
+              setDropError(
+                t("addData.photos.errorNoGps", { count: photoResult.total }),
               );
-              const importedLayers = await loadDroppedVectorPaths(otherPaths, {
+            }
+            const restPaths = otherPaths.filter(
+              (path) => !isPhotoDropFileName(path),
+            );
+
+            if (restPaths.length > 0) {
+              const rasterCount = await addDroppedRasters(
+                await loadDroppedRasterPaths(restPaths),
+              );
+              const importedLayers = await loadDroppedVectorPaths(restPaths, {
                 onLargeDataset: confirmLargeVectorDataset,
               });
               // See the browser handler: skip finishDrop's empty-input error
-              // when PBF files were present (even if rejected/failed).
+              // when PBF or photo files were present (even if rejected/failed).
+              // See the browser handler: suppress the empty-input error when
+              // photos were present so it can't clobber the GPS error above.
               if (
                 importedLayers.length > 0 ||
                 rasterCount > 0 ||
-                pbfPaths.length === 0
+                (pbfPaths.length === 0 && photoResult === null)
               ) {
                 finishDrop(importedLayers, rasterCount);
               }
@@ -1097,7 +1147,11 @@ export function DesktopShell({
       disposed = true;
       unlisten?.();
     };
-  }, [clearDropMessageLater, finishDrop, addDroppedRasters, addGeoJsonLayer]);
+  }, [clearDropMessageLater,
+    finishDrop,
+    addDroppedRasters,
+    addDroppedPhotos,
+    addGeoJsonLayer]);
 
   const handleDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (!hasDroppedFiles(event)) return;
@@ -1184,22 +1238,42 @@ export function DesktopShell({
           );
         }
 
-        if (otherFiles.length > 0) {
-          const rasterCount = await addDroppedRasters(
-            loadDroppedRasterFiles(otherFiles),
+        // Geotagged photos (JPEG/PNG/WebP/HEIC) become a single point layer of
+        // their own; TIFF is left to the raster path. Handle them before the
+        // vector/raster pipeline so a .jpg isn't sent to the DuckDB vector
+        // loader (which would fail).
+        const photoResult = await loadDroppedPhotoFiles(otherFiles);
+        const photoCount = addDroppedPhotos(photoResult);
+        // Surface a clear message when every dropped photo lacked GPS, so the
+        // drop doesn't complete silently.
+        if (photoResult && photoCount === 0 && photoResult.total > 0) {
+          setDropError(
+            t("addData.photos.errorNoGps", { count: photoResult.total }),
           );
-          const importedLayers = await loadDroppedVectorFiles(otherFiles, {
+        }
+        const restFiles = otherFiles.filter(
+          (file) => !isPhotoDropFileName(file.name),
+        );
+
+        if (restFiles.length > 0) {
+          const rasterCount = await addDroppedRasters(
+            loadDroppedRasterFiles(restFiles),
+          );
+          const importedLayers = await loadDroppedVectorFiles(restFiles, {
             onLargeDataset: confirmLargeVectorDataset,
           });
           // Call finishDrop (which reports success or throws the empty-input
           // error) only when the other files produced something, or when the
-          // drop contained no PBF files at all. If PBF files were present —
+          // drop contained no PBF/photo files at all. If those were present —
           // even if they were all rejected or failed — its empty-input error
-          // would wrongly clobber the PBF outcome.
+          // would wrongly clobber their outcome.
+          // Suppress finishDrop's empty-input error whenever photos were
+          // present (photoResult !== null) — even if all lacked GPS — so its
+          // generic message can't clobber the specific GPS error set above.
           if (
             importedLayers.length > 0 ||
             rasterCount > 0 ||
-            pbfFiles.length === 0
+            (pbfFiles.length === 0 && photoResult === null)
           ) {
             finishDrop(importedLayers, rasterCount);
           }
@@ -1213,7 +1287,11 @@ export function DesktopShell({
         clearDropMessageLater();
       }
     },
-    [clearDropMessageLater, finishDrop, addDroppedRasters, addGeoJsonLayer],
+    [clearDropMessageLater,
+    finishDrop,
+    addDroppedRasters,
+    addDroppedPhotos,
+    addGeoJsonLayer],
   );
 
   const startLayerPanelResize = useCallback(
