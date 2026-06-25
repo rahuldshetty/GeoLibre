@@ -145,6 +145,17 @@ VITE_HERE_API_KEY=your_here_api_key                 # HERE Traffic Flow
 
 Google Traffic reuses the same `VITE_GOOGLE_MAPS_API_KEY` as Street View; enable the **Map Tiles API** for that key in Google Cloud. A newly entered key takes effect immediately, without reopening the project. Until a provider's key is set, its overlay reports a missing-key error instead of loading tiles.
 
+## Optional Amazon Location styles
+
+The **Amazon Location** entries in the Basemaps control are *style basemaps* (they replace the whole map style, unlike the traffic overlays above). They authenticate with your own Amazon Location API key, set in **Settings → Environment Variables** (or baked into `apps/geolibre-desktop/.env.local`):
+
+```env
+VITE_AMAZON_LOCATION_API_KEY=your_amazon_location_api_key   # Amazon Location styles
+VITE_AMAZON_LOCATION_AWS_REGION=us-east-1                   # optional; omit to use the control's built-in default region
+```
+
+Keys set via **Settings → Environment Variables**, or typed directly into the panel's **API keys** view (the key button in the panel header), apply at runtime without reopening the project. A key baked into `apps/geolibre-desktop/.env.local` is read at build time and needs a dev server restart. When `VITE_AMAZON_LOCATION_API_KEY` is set in the environment it takes precedence over a key typed in the panel; removing it from the environment clears it on the next page reload.
+
 ## Optional Python sidecar
 
 The optional FastAPI sidecar is reserved for heavier processing workflows and is not required for the desktop UI.

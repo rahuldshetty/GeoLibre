@@ -30,15 +30,14 @@ function getRuntimeEnvironment(): Record<string, string | undefined> {
 }
 
 /**
- * Provider credentials for the traffic overlays added in
- * maplibre-gl-basemap-control 0.6.0. The keys come from runtime environment
- * variables (set in Settings → Environment Variables), so users opt in with
- * their own API keys; Google Traffic reuses the same VITE_GOOGLE_MAPS_API_KEY
- * that the Street View plugin reads. Returns empty strings when unset, which the
- * control treats as "no key" (the overlay then surfaces a "Get a … API key"
- * error rather than loading tiles).
+ * Traffic-overlay provider credentials (added in maplibre-gl-basemap-control
+ * 0.6.0) read from runtime environment variables (set in Settings → Environment
+ * Variables), so users opt in with their own keys. Google Traffic reuses the
+ * same VITE_GOOGLE_MAPS_API_KEY that the Street View plugin reads. Returns empty
+ * strings when unset, which the control treats as "no key" (the overlay then
+ * surfaces a "Get a … API key" error rather than loading tiles).
  */
-function getBasemapCredentials(): {
+function getTrafficOverlayCredentials(): {
   googleMapsApiKey: string;
   tomtomApiKey: string;
   hereApiKey: string;
@@ -49,6 +48,22 @@ function getBasemapCredentials(): {
     tomtomApiKey: env.VITE_TOMTOM_API_KEY?.trim() || "",
     hereApiKey: env.VITE_HERE_API_KEY?.trim() || "",
   };
+}
+
+/**
+ * Amazon Location credentials from runtime env, or null when no key is set.
+ * Unlike the always-applied traffic keys above, these are applied only when a
+ * key is actually configured, for two reasons: the user's primary way to enter
+ * an Amazon key is the panel's API keys view (#837), so an unrelated env change
+ * must not clobber a key typed there; and the region is omitted when unset so
+ * the control keeps its own default region rather than GeoLibre hardcoding one.
+ */
+function getAmazonCredentials(): { amazonApiKey: string; awsRegion?: string } | null {
+  const env = getRuntimeEnvironment();
+  const amazonApiKey = env.VITE_AMAZON_LOCATION_API_KEY?.trim() || "";
+  if (!amazonApiKey) return null;
+  const awsRegion = env.VITE_AMAZON_LOCATION_AWS_REGION?.trim() || undefined;
+  return awsRegion ? { amazonApiKey, awsRegion } : { amazonApiKey };
 }
 
 let basemapControlPosition: GeoLibreMapControlPosition = "top-left";
@@ -155,10 +170,14 @@ function getBasemapControlOptions(
     collapsed: false,
     position: basemapControlPosition,
     title: "Basemaps",
-    // Traffic overlays (Google/TomTom/HERE) authenticate with the user's own
-    // API keys, read from runtime env. Unset keys are harmless: the overlay just
-    // reports a missing-key error instead of loading tiles.
-    ...getBasemapCredentials(),
+    // Provider basemaps that need a key (the Google/TomTom/HERE traffic overlays
+    // and the Amazon Location styles) authenticate with the user's own
+    // credentials, read from runtime env. Unset keys are harmless: the basemap
+    // just reports a missing-key error instead of loading tiles. Amazon is
+    // spread only when its key is set, so an unset key leaves the control's own
+    // region default in place.
+    ...getTrafficOverlayCredentials(),
+    ...(getAmazonCredentials() ?? {}),
     // A style basemap (e.g. OpenFreeMap 3D) swaps the whole map style and so
     // discards every stacked raster basemap. In stack mode that silently wiped
     // a carefully assembled stack, so confirm before the rasters are lost. See
@@ -187,11 +206,17 @@ function addRuntimeEnvListener(): void {
 
   const handleRuntimeEnvChange = () => {
     if (!basemapControl) return;
-    const { googleMapsApiKey, tomtomApiKey, hereApiKey } =
-      getBasemapCredentials();
+    const { googleMapsApiKey, tomtomApiKey, hereApiKey } = getTrafficOverlayCredentials();
     basemapControl.setGoogleMapsApiKey(googleMapsApiKey);
     basemapControl.setTomTomApiKey(tomtomApiKey);
     basemapControl.setHereApiKey(hereApiKey);
+    // Only push Amazon credentials when a key is configured via env, so an
+    // unrelated env change never clears a key entered in the panel. The region
+    // is left undefined when unset, keeping the control's own default.
+    const amazon = getAmazonCredentials();
+    if (amazon) {
+      basemapControl.setAmazonCredentials(amazon.amazonApiKey, amazon.awsRegion);
+    }
   };
 
   window.addEventListener("geolibre:runtime-env-change", handleRuntimeEnvChange);
