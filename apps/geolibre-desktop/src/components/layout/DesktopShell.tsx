@@ -56,6 +56,10 @@ import {
   type GeotaggedPhotoResult,
 } from "../../lib/geotagged-photos";
 import type { LargeVectorDataset } from "../../lib/duckdb-vector-guard";
+import {
+  PANEL_RESIZE_END_EVENT,
+  PANEL_RESIZE_START_EVENT,
+} from "../../lib/panel-resize";
 import i18n from "../../i18n";
 import {
   addOsmPbfLayers,
@@ -273,16 +277,16 @@ const SegmentationDialog = lazy(() =>
     }),
 );
 
-const SqlWorkspaceDialog = lazy(() =>
-  import("../processing/SqlWorkspaceDialog")
+const SqlWorkspacePanel = lazy(() =>
+  import("../panels/SqlWorkspacePanel")
     .then((module) => ({
-      default: module.SqlWorkspaceDialog,
+      default: module.SqlWorkspacePanel,
     }))
     .catch((error) => {
       // Same chunk-load fallback rationale as ProcessingDialog above.
-      console.error("Failed to load SqlWorkspaceDialog", error);
+      console.error("Failed to load SqlWorkspacePanel", error);
       const Fallback = (() =>
-        null) as unknown as typeof import("../processing/SqlWorkspaceDialog").SqlWorkspaceDialog;
+        null) as unknown as typeof import("../panels/SqlWorkspacePanel").SqlWorkspacePanel;
       return { default: Fallback };
     }),
 );
@@ -378,8 +382,6 @@ const COLLAPSED_PANEL_RAIL_WIDTH = 44;
 const DEFAULT_NOTEBOOK_PANEL_WIDTH = 480;
 const MIN_NOTEBOOK_PANEL_WIDTH = 320;
 const MAX_NOTEBOOK_PANEL_WIDTH = 1100;
-const PANEL_RESIZE_START_EVENT = "geolibre:panel-resize-start";
-const PANEL_RESIZE_END_EVENT = "geolibre:panel-resize-end";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -468,6 +470,8 @@ export function DesktopShell({
   const projectGeneration = useAppStore((s) => s.projectGeneration);
   const pythonConsoleOpen = useAppStore((s) => s.ui.pythonConsoleOpen);
   const setPythonConsoleOpen = useAppStore((s) => s.setPythonConsoleOpen);
+  const sqlWorkspaceOpen = useAppStore((s) => s.ui.sqlWorkspaceOpen);
+  const setSqlWorkspaceOpen = useAppStore((s) => s.setSqlWorkspaceOpen);
   const notebookOpen = useAppStore((s) => s.ui.notebookOpen);
   const storymapPresenting = useAppStore((s) => s.ui.storymapPresenting);
   // A plugin panel docks at one of four positions beside the Layers/Style
@@ -1800,6 +1804,16 @@ export function DesktopShell({
           </Suspense>
         </SectionErrorBoundary>
       ) : null}
+      {sqlWorkspaceOpen ? (
+        <SectionErrorBoundary
+          label="SQL workspace"
+          onClose={() => setSqlWorkspaceOpen(false)}
+        >
+          <Suspense fallback={null}>
+            <SqlWorkspacePanel />
+          </Suspense>
+        </SectionErrorBoundary>
+      ) : null}
       {assistantOpen ? (
         <SectionErrorBoundary label="Assistant">
           <Suspense fallback={null}>
@@ -1866,9 +1880,6 @@ export function DesktopShell({
       </Suspense>
       <Suspense fallback={null}>
         <SegmentationDialog mapControllerRef={mapControllerRef} />
-      </Suspense>
-      <Suspense fallback={null}>
-        <SqlWorkspaceDialog />
       </Suspense>
       <StoryMapPanel mapControllerRef={mapControllerRef} />
       <StoryMapPresenter mapControllerRef={mapControllerRef} />
