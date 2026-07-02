@@ -456,7 +456,18 @@
       "cornersNote": "The four corners georeference the video on the map. The video must be served over HTTPS and the host must allow cross-origin requests (CORS) for the frames to render."
     },
     "netcdf": {
-      "sampleLabel": "Air temperature"
+      "sampleLabel": "Air temperature",
+      "title": "Add NetCDF / HDF",
+      "description": "Render a NetCDF or HDF5 dataset: a remote Cloud-Optimized file via a kerchunk reference (read over HTTP range requests), or a local NetCDF or HDF5 file read in your browser.",
+      "sourceLabel": "Source",
+      "sourceCloud": "Cloud-Optimized (kerchunk URL)",
+      "sourceLocal": "Local file (NetCDF / HDF5)",
+      "localFileLabel": "Local file",
+      "chooseDifferentFile": "Choose a different file",
+      "readingFile": "Reading...",
+      "localFileHelp": "Select a local NetCDF or HDF5 file (.nc, .nc4, .cdf, .h5, or .hdf5); classic NetCDF-3 and NetCDF-4/HDF5 are both supported. It is decoded in your browser; large files use more memory.",
+      "errorNoVariables": "No renderable (2-D or higher) variables found in the file.",
+      "errorNoFile": "No file loaded."
     },
     "deckViz": {
       "defaultName": "Deck.gl Layer",
