@@ -59,6 +59,21 @@ export const DEFAULT_XYZ_URL =
 export const DEFAULT_WMS_ENDPOINT =
   "https://imagery.nationalmap.gov/arcgis/services/USGSNAIPImagery/ImageServer/WMSServer";
 export const DEFAULT_WMS_LAYERS = "USGSNAIPImagery:FalseColorComposite";
+// GEBCO global ocean bathymetry — a keyless WMS 1.3.0 service serving the latest
+// GEBCO grid as a shaded-relief image (Web Mercator supported, so it renders on
+// MapLibre). Sourced from the General Bathymetric Chart of the Oceans; requires
+// attribution and must not be used for navigation. See gebco.net/data-products.
+export const GEBCO_WMS_ENDPOINT = "https://wms.gebco.net/mapserv";
+export const GEBCO_WMS_LAYERS = "GEBCO_LATEST";
+// GEBCO's license requires its imagery credit the source. `attributionForTileUrl`
+// (helpers) attaches this to any GEBCO WMS layer, however it was added (the sample
+// below or a hand-pasted wms.gebco.net URL).
+// NOTE: the `GEBCO_LATEST` layer always resolves to GEBCO's newest annual grid,
+// but the year below is not derived from anything — unlike the EOX credit above,
+// whose year lives in the tile URL. Bump this year by hand when GEBCO ships a new
+// annual release (e.g. GEBCO_2027) so the citation does not drift from the data.
+export const GEBCO_ATTRIBUTION =
+  'Imagery reproduced from the GEBCO Compilation Group (2026) GEBCO Grid, <a href="https://www.gebco.net" target="_blank" rel="noreferrer">GEBCO</a>';
 export const DEFAULT_WFS_ENDPOINT = "https://ahocevar.com/geoserver/wfs";
 export const DEFAULT_WFS_TYPE_NAME = "topp:states";
 // EOX "Sentinel-2 cloudless" — a global, keyless RESTful WMTS imagery layer
