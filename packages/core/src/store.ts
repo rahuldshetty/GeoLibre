@@ -41,6 +41,7 @@ import {
   type GeoLibreLayer,
   type GeoLibreProject,
   type LayerGroup,
+  type AttributeFormConfig,
   type LayerJoin,
   type LayerVirtualField,
   type LayerStyle,
@@ -508,6 +509,15 @@ export interface AppState {
    * Pass an empty array to detach every join and restore the base attributes.
    */
   setLayerJoins: (id: string, joins: LayerJoin[]) => void;
+  /**
+   * Replace the layer's Attribute Form designer configuration (per-field edit
+   * widgets, constraints, conditional visibility). Pass `undefined` to remove
+   * the form config entirely.
+   */
+  setLayerAttributeForm: (
+    id: string,
+    attributeForm: AttributeFormConfig | undefined,
+  ) => void;
   /**
    * Replace a layer's virtual fields and immediately re-derive its computed
    * columns (strip what the previous fields added, evaluate the new list).
@@ -1432,6 +1442,9 @@ export const useAppStore = create<AppState>()(
           layers = cascadeLayerJoinRefresh(layers, id);
           return { layers, isDirty: true };
         }),
+
+      setLayerAttributeForm: (id, attributeForm) =>
+        get().updateLayer(id, { attributeForm }),
 
       setLayerVirtualFields: (id, fields) =>
         set((s) => {
