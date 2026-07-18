@@ -1,4 +1,4 @@
-import { type GeoLibreLayer, useAppStore } from "@geolibre/core";
+import { type GeoLibreLayer, styleValue, useAppStore } from "@geolibre/core";
 import type { Layer } from "@deck.gl/core";
 import type { GeoLibreAppAPI, GeoLibreDeckGL } from "../../types";
 import { ensureMercatorProjection } from "../map-projection-utils";
@@ -6,6 +6,7 @@ import {
   ensureSharedDeckOverlay,
   setSharedDeckLayers,
 } from "../shared-deck-overlay";
+import { buildDiagramLayers, isDiagramLayer } from "./diagrams";
 import { buildElevation3dLayers, isElevation3dLayer } from "./elevation";
 import {
   type DeckVizBuildContext,
@@ -108,7 +109,27 @@ export function deactivateDeckViz(_app: GeoLibreAppAPI): void {
   storeUnsubscribe?.();
   storeUnsubscribe = null;
   stopAnimation();
+  syncViewListeners(null);
   setSharedDeckLayers("deckviz", []);
+}
+
+// The map the diagram view listeners are attached to. Diagram layers with a
+// min-zoom or decluttering need a rebuild when the view settles (the deck
+// layer list itself is view-independent otherwise).
+type ViewListenerMap = {
+  on: (event: string, handler: () => void) => unknown;
+  off: (event: string, handler: () => void) => unknown;
+};
+let viewListenerMap: ViewListenerMap | null = null;
+const handleViewChange = (): void => renderDeckVizLayers();
+
+function syncViewListeners(target: ViewListenerMap | null): void {
+  if (viewListenerMap === target) return;
+  viewListenerMap?.off("zoomend", handleViewChange);
+  viewListenerMap?.off("moveend", handleViewChange);
+  viewListenerMap = target;
+  target?.on("zoomend", handleViewChange);
+  target?.on("moveend", handleViewChange);
 }
 
 function renderDeckVizLayers(): void {
@@ -116,12 +137,18 @@ function renderDeckVizLayers(): void {
 
   const storeLayers = useAppStore.getState().layers;
   const vizLayers = storeLayers.filter(isDeckVizLayer);
+  const diagramLayers = storeLayers.filter(
+    (layer) => layer.visible && isDiagramLayer(layer),
+  );
   const hasRenderableLayers =
-    vizLayers.length > 0 || storeLayers.some(isElevation3dLayer);
+    vizLayers.length > 0 ||
+    diagramLayers.length > 0 ||
+    storeLayers.some(isElevation3dLayer);
 
   if (!hasRenderableLayers) {
     setSharedDeckLayers("deckviz", []);
     stopAnimation();
+    syncViewListeners(null);
     return;
   }
 
@@ -138,13 +165,38 @@ function renderDeckVizLayers(): void {
   const currentTime = updateAnimationClock(contexts);
   const contextById = new Map(contexts.map((entry) => [entry.id, entry]));
 
-  // Walk the store order (first-is-top) so deck-viz layers and 3D Z-value
-  // vector layers interleave exactly as the Layers panel shows them.
+  // Diagram layers need the live view for their min-zoom gate and optional
+  // screen-space decluttering, and a rebuild when the view settles.
+  const map = appRef.getMap?.() ?? null;
+  const diagramOptions = {
+    zoom: map?.getZoom(),
+    project: map
+      ? (position: [number, number]) => map.project(position)
+      : null,
+  };
+  syncViewListeners(
+    diagramLayers.some(
+      (layer) =>
+        styleValue(layer.style, "diagramMinZoom") > 0 ||
+        styleValue(layer.style, "diagramDeclutter"),
+    )
+      ? (map as ViewListenerMap | null)
+      : null,
+  );
+
+  // Walk the store order (first-is-top) so deck-viz layers, 3D Z-value vector
+  // layers, and feature diagrams interleave exactly as the Layers panel shows
+  // them.
   const deckLayers: Layer[] = [];
   for (const layer of storeLayers) {
     if (!layer.visible) continue;
     const entry = contextById.get(layer.id);
     try {
+      // Diagrams go first so the final reverse() puts them on top of the same
+      // layer's other deck rendering (e.g. its 3D Z-value geometry).
+      if (isDiagramLayer(layer)) {
+        deckLayers.push(...buildDiagramLayers(deckGL, layer, diagramOptions));
+      }
       if (entry) {
         deckLayers.push(
           entry.def.build(deckGL, entry.id, {

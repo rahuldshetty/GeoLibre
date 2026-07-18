@@ -99,6 +99,128 @@ describe("buildLegend", () => {
     assert.equal(legend[0].swatches[1].label, "≥ 100");
   });
 
+  const polygonGeojson = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 0],
+            ],
+          ],
+        },
+        properties: { votes_a: 1, votes_b: 2, youth: 3 },
+      },
+    ],
+  } as GeoJSON.FeatureCollection;
+
+  it("appends a labeled swatch per diagram attribute after the base symbology", () => {
+    const legend = buildLegend([
+      makeLayer({
+        name: "Election",
+        geojson: polygonGeojson,
+        style: {
+          vectorStyleMode: "single",
+          fillColor: "#ff0000",
+          diagramType: "pie",
+          diagramFields: [
+            { property: "votes_a", color: "#111111" },
+            { property: "votes_b", color: "#222222" },
+            { property: "", color: "#333333" },
+          ],
+        } as LayerStyle,
+      }),
+    ]);
+    assert.equal(legend[0].swatches.length, 3);
+    assert.equal(legend[0].swatches[0].color, "#ff0000");
+    assert.deepEqual(legend[0].swatches[1], {
+      color: "#111111",
+      label: "votes_a",
+    });
+    assert.deepEqual(legend[0].swatches[2], {
+      color: "#222222",
+      label: "votes_b",
+    });
+  });
+
+  it("omits diagram swatches when the point renderer suppresses diagrams", () => {
+    const pointGeojson = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          geometry: { type: "Point", coordinates: [0, 0] },
+          properties: { votes_a: 1 },
+        },
+      ],
+    } as GeoJSON.FeatureCollection;
+    const diagramStyle = {
+      vectorStyleMode: "single",
+      fillColor: "#ff0000",
+      pointRenderer: "cluster",
+      diagramType: "pie",
+      diagramFields: [{ property: "votes_a", color: "#111111" }],
+    } as LayerStyle;
+    const legend = buildLegend([
+      makeLayer({ name: "Stations", geojson: pointGeojson, style: diagramStyle }),
+    ]);
+    assert.equal(legend[0].swatches.length, 1);
+    assert.equal(legend[0].swatches[0].color, "#ff0000");
+
+    // A stale cluster renderer on a layer that is no longer point-only must
+    // not suppress the swatches (mirrors the render gate).
+    const mixedGeojson = {
+      type: "FeatureCollection",
+      features: [
+        ...pointGeojson.features,
+        {
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [0, 0],
+              [1, 1],
+            ],
+          },
+          properties: { votes_a: 2 },
+        },
+      ],
+    } as GeoJSON.FeatureCollection;
+    const mixed = buildLegend([
+      makeLayer({ name: "Mixed", geojson: mixedGeojson, style: diagramStyle }),
+    ]);
+    assert.equal(mixed[0].swatches.length, 2);
+  });
+
+  it("appends diagram swatches after graduated ramp swatches", () => {
+    const legend = buildLegend([
+      makeLayer({
+        name: "Population",
+        geojson: polygonGeojson,
+        style: {
+          vectorStyleMode: "graduated",
+          vectorStyleStops: [
+            { value: 0, color: "#eef" },
+            { value: 100, color: "#88a" },
+          ],
+          diagramType: "bar",
+          diagramFields: [{ property: "youth", color: "#444444" }],
+        } as LayerStyle,
+      }),
+    ]);
+    assert.equal(legend[0].swatches.length, 3);
+    assert.deepEqual(legend[0].swatches[2], {
+      color: "#444444",
+      label: "youth",
+    });
+  });
+
   it("caps ramp swatches at six samples", () => {
     const stops = Array.from({ length: 12 }, (_, i) => ({
       value: i,

@@ -1,5 +1,8 @@
 import {
   DEFAULT_LAYER_STYLE,
+  type DiagramField,
+  type DiagramSizeMode,
+  type DiagramType,
   type FillPattern,
   type LabelStyle,
   type LayerType,
@@ -10,6 +13,7 @@ import {
   type VectorRule,
   type VectorStyleMode,
   type VectorStyleStop,
+  collectDiagramData,
   createEqualIntervalBreaks,
   createQuantileBreaks,
   geojsonHasZCoordinates,
@@ -33,7 +37,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@geolibre/ui";
-import { RASTER_SOURCE_KIND, SKETCHES_SOURCE_KIND } from "@geolibre/plugins";
+import {
+  RASTER_SOURCE_KIND,
+  SKETCHES_SOURCE_KIND,
+  countAtlasDroppedDiagrams,
+} from "@geolibre/plugins";
 import type { MapController } from "@geolibre/map";
 import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -1253,6 +1261,85 @@ export function StylePanel({
         : { hasPoint: true, hasLine: true, hasPolygon: true },
     [layer],
   );
+  // Diagram-loss notices: whether the feature cap truncates the drawable
+  // dataset (derived from the real scan — features without an anchor or a
+  // positive value don't consume the cap, so the raw count alone would
+  // false-positive), and whether the icon atlas drops diagrams that don't fit
+  // its height/texture bound (e.g. a large diagram size on many features).
+  // Dependencies are the geojson and the specific diagram style fields (not
+  // the layer object, which is recreated on every style edit) so unrelated
+  // panel edits never re-run the feature scan. Kept before the early returns
+  // below so the hook order stays stable.
+  const diagramGeojson = layer?.geojson;
+  const diagramStyleType = layer ? styleValue(layer.style, "diagramType") : "none";
+  const diagramStyleFields = layer
+    ? styleValue(layer.style, "diagramFields")
+    : DEFAULT_LAYER_STYLE.diagramFields;
+  const diagramStyleSizeMode = layer
+    ? styleValue(layer.style, "diagramSizeMode")
+    : DEFAULT_LAYER_STYLE.diagramSizeMode;
+  const diagramStyleSize = layer
+    ? styleValue(layer.style, "diagramSize")
+    : DEFAULT_LAYER_STYLE.diagramSize;
+  const diagramStyleSizeProperty = layer
+    ? styleValue(layer.style, "diagramSizeProperty")
+    : "";
+  const { diagramTruncated, diagramDrawnCount, diagramAtlasDropped } =
+    useMemo(() => {
+    if (!layer || !diagramGeojson || diagramStyleType === "none") {
+      return {
+        diagramTruncated: false,
+        diagramDrawnCount: 0,
+        diagramAtlasDropped: 0,
+      };
+    }
+    // One shared scan feeds both notices; countAtlasDroppedDiagrams reuses it
+    // instead of rescanning the features.
+    const diagramData = collectDiagramData(diagramGeojson, layer.style);
+    return {
+      diagramTruncated: diagramData.truncated,
+      // The notice reports the count actually charted: truncation can come
+      // from either the draw cap or the raw-scan cap, so the drawn count is
+      // the only number that is accurate in both cases.
+      diagramDrawnCount: diagramData.data.length,
+      diagramAtlasDropped: countAtlasDroppedDiagrams(
+        { geojson: diagramGeojson, style: layer.style },
+        diagramData,
+      ),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layer.style is
+    // intentionally represented by the specific diagram fields below.
+  }, [
+    diagramGeojson,
+    diagramStyleType,
+    diagramStyleFields,
+    diagramStyleSizeMode,
+    diagramStyleSize,
+    diagramStyleSizeProperty,
+  ]);
+  // Numeric-attribute candidates for the diagram field pickers. Unlike
+  // graduated classification (which needs a value spread), one finite value
+  // qualifies. Memoized on the geojson/metadata (not the layer object) so
+  // unrelated panel edits never re-run the per-property feature scans. Kept
+  // before the early returns below so the hook order stays stable.
+  const diagramMetadata = layer?.metadata;
+  const diagramNumericProperties = useMemo(() => {
+    if (!diagramGeojson) return [];
+    const probe = { geojson: diagramGeojson, metadata: diagramMetadata ?? {} };
+    return getAttributePropertyNames(probe).filter((property) =>
+      getPropertyValues(probe, property).some((value) => {
+        // Blank strings coerce to 0 via Number(""), which would qualify a
+        // text column that merely has an empty cell somewhere; require an
+        // actual number or a non-blank numeric string.
+        if (typeof value === "number") return Number.isFinite(value);
+        return (
+          typeof value === "string" &&
+          value.trim() !== "" &&
+          Number.isFinite(Number(value))
+        );
+      }),
+    );
+  }, [diagramGeojson, diagramMetadata]);
   // Whether the layer's coordinates carry real Z values (e.g. GPX track
   // elevations), which unlocks the "3D (Z values)" visualization mode.
   // Memoized on the geojson reference (not the layer object, which is
@@ -2453,6 +2540,255 @@ export function StylePanel({
       )}
     </div>
   );
+  // --- Diagram symbology (per-feature pie/bar charts, immediate writes) ---
+  // The numeric-attribute candidates (diagramNumericProperties) are memoized
+  // above the early returns.
+  const diagramType = styleValue(style, "diagramType");
+  const diagramFields = styleValue(style, "diagramFields");
+  const diagramSizeMode = styleValue(style, "diagramSizeMode");
+  const setDiagramFields = (fields: DiagramField[]) =>
+    setLayerStyle(layer.id, { diagramFields: fields });
+  const addDiagramField = () => {
+    const used = new Set(diagramFields.map((field) => field.property));
+    const property =
+      diagramNumericProperties.find((candidate) => !used.has(candidate)) ?? "";
+    setDiagramFields([
+      ...diagramFields,
+      { property, color: nextStopColor(diagramFields.length) },
+    ]);
+  };
+  const updateDiagramField = (index: number, patch: Partial<DiagramField>) =>
+    setDiagramFields(
+      diagramFields.map((field, i) =>
+        i === index ? { ...field, ...patch } : field,
+      ),
+    );
+  const removeDiagramField = (index: number) =>
+    setDiagramFields(diagramFields.filter((_, i) => i !== index));
+  const showDiagramControls =
+    hasVectorPaintControls &&
+    layer.type === "geojson" &&
+    !!layer.geojson &&
+    !hasExternalDeckLayer(layer) &&
+    (!supportsPointRenderer || pointRenderer === "single") &&
+    (diagramNumericProperties.length > 0 || diagramFields.length > 0);
+
+  const diagramControls = (
+    <div className="space-y-3">
+      <div className="space-y-2">
+        <Label htmlFor="diagramType">{t("style.diagrams.chartType")}</Label>
+        <Select
+          id="diagramType"
+          value={diagramType}
+          onChange={(event) => {
+            const nextType = event.target.value as DiagramType;
+            // Seed the field list on first enable so a chart appears without
+            // hunting for the add button.
+            setLayerStyle(layer.id, { diagramType: nextType });
+            if (
+              nextType !== "none" &&
+              diagramFields.length === 0 &&
+              diagramNumericProperties.length > 0
+            ) {
+              setDiagramFields(
+                diagramNumericProperties
+                  .slice(0, 2)
+                  .map((property, index) => ({
+                    property,
+                    color: nextStopColor(index),
+                  })),
+              );
+            }
+          }}
+        >
+          <option value="none">{t("style.diagrams.typeNone")}</option>
+          <option value="pie">{t("style.diagrams.typePie")}</option>
+          <option value="donut">{t("style.diagrams.typeDonut")}</option>
+          <option value="bar">{t("style.diagrams.typeBar")}</option>
+          <option value="stacked-bar">
+            {t("style.diagrams.typeStackedBar")}
+          </option>
+        </Select>
+      </div>
+      {diagramType !== "none" && (
+        <>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label>{t("style.diagrams.fields")}</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="h-7 w-7"
+                title={t("style.diagrams.addField")}
+                aria-label={t("style.diagrams.addField")}
+                onClick={addDiagramField}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {diagramFields.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t("style.diagrams.noFields")}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {diagramFields.map((field, index) => (
+                  <div
+                    key={index}
+                    className="grid grid-cols-[auto_1fr_2rem] items-center gap-2"
+                  >
+                    <ColorField
+                      fill={false}
+                      aria-label={t("style.symbology.classColor", {
+                        index: index + 1,
+                      })}
+                      eyedropperLabel={t("style.symbology.classColorPick", {
+                        index: index + 1,
+                      })}
+                      className="h-9 w-9 p-1"
+                      buttonClassName="h-9 w-9"
+                      value={field.color}
+                      onChange={(color) => updateDiagramField(index, { color })}
+                    />
+                    <Select
+                      aria-label={t("style.diagrams.fieldAttribute", {
+                        index: index + 1,
+                      })}
+                      value={field.property}
+                      onChange={(event) =>
+                        updateDiagramField(index, {
+                          property: event.target.value,
+                        })
+                      }
+                    >
+                      <option value="">
+                        {t("style.symbology.chooseField")}
+                      </option>
+                      {diagramNumericProperties.map((property) => (
+                        <option key={property} value={property}>
+                          {property}
+                        </option>
+                      ))}
+                      {field.property !== "" &&
+                      !diagramNumericProperties.includes(field.property) ? (
+                        <option value={field.property}>{field.property}</option>
+                      ) : null}
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      title={t("style.diagrams.removeField")}
+                      aria-label={t("style.diagrams.removeField")}
+                      onClick={() => removeDiagramField(index)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="diagramSizeMode">
+              {t("style.diagrams.sizeMode")}
+            </Label>
+            <Select
+              id="diagramSizeMode"
+              value={diagramSizeMode}
+              onChange={(event) =>
+                setLayerStyle(layer.id, {
+                  diagramSizeMode: event.target.value as DiagramSizeMode,
+                })
+              }
+            >
+              <option value="fixed">{t("style.diagrams.sizeFixed")}</option>
+              <option value="sum">{t("style.diagrams.sizeSum")}</option>
+              <option value="attribute">
+                {t("style.diagrams.sizeAttribute")}
+              </option>
+            </Select>
+          </div>
+          {diagramSizeMode === "attribute" && (
+            <div className="space-y-2">
+              <Label htmlFor="diagramSizeProperty">
+                {t("style.diagrams.sizeField")}
+              </Label>
+              <Select
+                id="diagramSizeProperty"
+                value={styleValue(style, "diagramSizeProperty")}
+                onChange={(event) =>
+                  setLayerStyle(layer.id, {
+                    diagramSizeProperty: event.target.value,
+                  })
+                }
+              >
+                <option value="">{t("style.symbology.chooseField")}</option>
+                {diagramNumericProperties.map((property) => (
+                  <option key={property} value={property}>
+                    {property}
+                  </option>
+                ))}
+                {styleValue(style, "diagramSizeProperty") !== "" &&
+                !diagramNumericProperties.includes(
+                  styleValue(style, "diagramSizeProperty"),
+                ) ? (
+                  <option value={styleValue(style, "diagramSizeProperty")}>
+                    {styleValue(style, "diagramSizeProperty")}
+                  </option>
+                ) : null}
+              </Select>
+            </div>
+          )}
+          <NumericStyleInput
+            id="diagramSize"
+            label={t("style.diagrams.size")}
+            min={8}
+            max={120}
+            step={1}
+            value={styleValue(style, "diagramSize")}
+            onChange={(diagramSize) => setLayerStyle(layer.id, { diagramSize })}
+          />
+          {diagramTruncated && (
+            <p className="text-xs text-muted-foreground">
+              {t("style.diagrams.truncated", { count: diagramDrawnCount })}
+            </p>
+          )}
+          {diagramAtlasDropped > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t("style.diagrams.atlasFull", { count: diagramAtlasDropped })}
+            </p>
+          )}
+          <NumericStyleInput
+            id="diagramMinZoom"
+            label={t("style.diagrams.minZoom")}
+            min={0}
+            max={24}
+            step={1}
+            value={styleValue(style, "diagramMinZoom")}
+            onChange={(diagramMinZoom) =>
+              setLayerStyle(layer.id, { diagramMinZoom })
+            }
+          />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={styleValue(style, "diagramDeclutter")}
+              onChange={(event) =>
+                setLayerStyle(layer.id, {
+                  diagramDeclutter: event.target.checked,
+                })
+              }
+            />
+            {t("style.diagrams.declutter")}
+          </label>
+        </>
+      )}
+    </div>
+  );
+
   const labelControls = (
     <div className="space-y-3">
       <label
@@ -3490,6 +3826,15 @@ export function StylePanel({
                 <>
                   <Separator />
                   {markerControls}
+                </>
+              )}
+              {showDiagramControls && (
+                <>
+                  <Separator />
+                  <p className="text-sm font-semibold">
+                    {t("style.diagrams.heading")}
+                  </p>
+                  {diagramControls}
                 </>
               )}
             </>
