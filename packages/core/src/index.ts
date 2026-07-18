@@ -29,6 +29,7 @@ export {
   useAppStore,
   type AppState,
   type ConversionToolKind,
+  type GpsStatusFix,
   type NetworkToolKind,
   type RasterToolKind,
   type StatisticsToolKind,
